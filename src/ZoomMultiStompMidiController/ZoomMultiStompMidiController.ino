@@ -19,7 +19,7 @@
 #define DISP_MAX_BRIGHTNESS 6
 #define MIDI_CHANNEL  1 
 
-#define HEARTBEAT_INTERVAL 10000
+#define HEARTBEAT_INTERVAL 400
 
 #define LONG_PRESS_TIME 500
 
@@ -63,6 +63,8 @@ byte CURRENT_MODEL = 0x5f;   //0x58 = MS-50G, 0x61 = MS-70CD, 0x5f = MS-60B
 byte CURRENT_PATCH[105] =  {0xF0,0x52,0x00,0x5F,0x28,0x02,0x31,0x02,0x00,0x0C,0x0A,0x10,0x01,0x00,0x03,0x50,0x60,0x00,0x05,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x41,0x00,0x00,0x08,0x42,0x00,0x0C,0x00,0x34,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x31,0x00,0x00,0x04,0x01,0x30,0x58,0x00,0x04,0x20,0x40,0x00,0x11,0x41,0x00,0x06,0x00,0x00,0x00,0x00,0x71,0x01,0x00,0x00,0x0C,0x06,0x58,0x00,0x28,0x50,0x00,0x40,0x06,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x00,0x40,0x10,0x0F,0x4F,0x63,0x00,0x74,0x61,0x76,0x65,0x72,0x20,0x20,0x00,0x20,0x00,0xF7};
 char CURRENT_NAME[11] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
 uint8_t CURRENT_DISPLAY = 4;
+int8_t CURRENT_DISPLAY_POSITION = 0;
+
 
 uint8_t effectsEnabled[4] = {0, 0, 0, 0};
 
@@ -83,9 +85,12 @@ static void onControlChange(Channel channel, byte controller, byte value)
 
 static void onProgramChange(Channel channel, byte program)
 {
-    //Serial.printf("C%u: Prog=%u\r\n", channel, program);
+    Serial.printf("C%u: Prog=%u\r\n", channel, program);
     CURRENT_PROGRAM = program;
+    sendPatchRequest();
+  
     PrintCurrentState();
+    RefreshDisplay();
 }
 
 
@@ -111,19 +116,21 @@ static void onSysEx(byte* message, unsigned size)
 
         if(message[4] == 0x28){         // F0 52 00 5F 28 ... // Patch Data
 
-          
-
+      
           memcpy(CURRENT_PATCH, message, size);
           //for(unsigned i = 0; i < size; i++) Serial.printf("%02x ", CURRENT_PATCH[i]);
           Serial.printf("\r\n");
           ParseCurrentPatch();
 
 
-          display.printf("%d%d%d%d", effectsEnabled[3], effectsEnabled[2], effectsEnabled[1], effectsEnabled[0]);
+          //display.printf("%d%d%d%d", effectsEnabled[3], effectsEnabled[2], effectsEnabled[1], effectsEnabled[0]);
 
           //Serial.printf("Effects: %d%d%d%d\r\n", effectsEnabled[3], effectsEnabled[2], effectsEnabled[1], effectsEnabled[0]);
 
           PrintCurrentState();
+
+          //RefreshDisplay();
+
 
           //sendProgramRequest();
 
@@ -207,6 +214,7 @@ static void onMIDIconnect(uint8_t devAddr, uint8_t nInCables, uint8_t nOutCables
     midi_dev_addr = devAddr;
     registerMidiInCallbacks();
     Refresh();
+    //sendProgramRequest();
 }
 
 static void onMIDIdisconnect(uint8_t devAddr)
@@ -237,6 +245,11 @@ static bool sendProgramChange(uint8_t prog)
         return false; // not connected
     if(prog >= 49) prog = 49;
     intf->sendProgramChange(prog, MIDI_CHANNEL);
+    usbhMIDI.writeFlushAll();
+    sendProgramRequest();
+    usbhMIDI.readAll();
+
+    //Refresh();
     return true;
 }
 
@@ -259,6 +272,15 @@ static bool sendEditModeOn()
     return true;
 }
 
+static bool sendEditModeOff()
+{
+    auto intf = usbhMIDI.getInterfaceFromDeviceAndCable(midi_dev_addr, midi_dev_cable);
+    if (intf == nullptr)
+        return false; // not connected
+    intf->sendSysEx(6, SysEx_Edit_On, true);
+    return true;
+}
+
 static bool sendPatchRequest()
 {   
     sendEditModeOn();
@@ -272,7 +294,7 @@ static bool sendPatchRequest()
 
 static bool sendProgramRequest()
 {
-    sendEditModeOn();
+   // sendEditModeOn();
     auto intf = usbhMIDI.getInterfaceFromDeviceAndCable(midi_dev_addr, midi_dev_cable);
     if (intf == nullptr)
         return false; // not connected
@@ -280,6 +302,7 @@ static bool sendProgramRequest()
       //f0 52 00 5f 33 f7 -> b0 00 00 (\n) b0 20 00 (\n) c0 pp 
       //	pp = patch
     intf->sendSysEx(6, SysEx_Program_Reqeust, true);
+    //Refresh();
     return true;
 }
 
@@ -369,12 +392,13 @@ void loop() {
 
 void Refresh()
 {
+    
     sendEditModeOn();
     sendPatchRequest();
+    //sendProgramRequest();
+    usbhMIDI.writeFlushAll();
     usbhMIDI.readAll();
     ParseCurrentPatch();
-    sendProgramRequest();
-    usbhMIDI.readAll();
 }
 
 
@@ -384,6 +408,8 @@ void Heartbeat(){
       return;
   timer_previous_millis = current_millis;
 
+  UpdateDisplay();
+  //display.shiftLeft();
  // sendProgramChange(32);
  // sendSysEx(6, SysEx_Edit_On);
   //sendSysEx(6, SysEx_Patch_Reqeust);
@@ -398,7 +424,7 @@ void PrintCurrentState(){
 uint8_t c1 = ((CURRENT_PATCH[85] >> 4) & 0x01);
 uint8_t c0 = ((CURRENT_PATCH[88] >> 6) & 0x01);
 
-  Serial.printf("(i) Current Patch (%d): %d, %d, %d, %d | %d (%02x), %d (%02x) = %d\r\n", (CURRENT_PROGRAM+1), (CURRENT_PATCH[6] & 1), (CURRENT_PATCH[26] & 1), (CURRENT_PATCH[47] & 1), (CURRENT_PATCH[67] & 1), c1, CURRENT_PATCH[85],  c0, CURRENT_PATCH[88],  CURRENT_DISPLAY);
+  Serial.printf("(i) Current Patch (%d, \"%s\"): %d, %d, %d, %d | %d (%02x), %d (%02x) = %d\r\n", (CURRENT_PROGRAM+1), CURRENT_NAME, (CURRENT_PATCH[6] & 1), (CURRENT_PATCH[26] & 1), (CURRENT_PATCH[47] & 1), (CURRENT_PATCH[67] & 1), c1, CURRENT_PATCH[85],  c0, CURRENT_PATCH[88],  CURRENT_DISPLAY);
 
 }
 
@@ -426,10 +452,6 @@ void ParseCurrentPatch(){
   CURRENT_NAME[8] = CURRENT_PATCH[100];
   CURRENT_NAME[9] = CURRENT_PATCH[102];
   CURRENT_NAME[10] = '\0';
-
-  //Serial.printf("(i) Patch Name: \"%s\" (", CURRENT_NAME);
-  //for(unsigned i = 0; i < 10; i++) Serial.printf("%02x ", CURRENT_NAME[i]);
-  //Serial.printf(")\r\n");
 }
 
 void ToggleEffect(uint8_t num){
@@ -518,8 +540,10 @@ void HandleButtons()
     ToggleEffect(2);
   }
   if (BTN_3.pressedFor(LONG_PRESS_TIME)){
+    sendEditModeOff();
     sendEditModeOn();
     sendPatchRequest();
+    display.print("RFSH");
   }
   if (BTN_3.isDoubleClick()){
     display.print("B3 D");
@@ -536,4 +560,36 @@ void HandleButtons()
   if (BTN_4.isDoubleClick()){
     //display.print("B4 D");
   }
+}
+
+
+void RefreshDisplay(){
+    CURRENT_DISPLAY_POSITION = -3;
+    UpdateDisplay();
+}
+
+void UpdateDisplay(){
+    //Serial.printf("(i) CURRENT_DISPLAY_POSITION: %d\r\n", CURRENT_DISPLAY_POSITION);
+    //
+
+
+    char displayContent[4] = {0x20, 0x20,0x20,0x20};
+
+    if(CURRENT_DISPLAY_POSITION < 50)
+      CURRENT_DISPLAY_POSITION++;
+
+    if(CURRENT_DISPLAY_POSITION >= 0 && CURRENT_DISPLAY_POSITION <= 6){
+      for (int x = 0; x < 4; x++)
+      {
+        displayContent[x] = CURRENT_NAME[x + CURRENT_DISPLAY_POSITION];
+      }
+      display.print(displayContent);
+    }
+    else if(CURRENT_DISPLAY_POSITION >= 6 && CURRENT_DISPLAY_POSITION <= 8){
+      // do nothing
+    }
+    else{
+      display.printf("P %02d", CURRENT_PROGRAM+1);
+      
+    }
 }
