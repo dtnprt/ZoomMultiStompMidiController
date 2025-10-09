@@ -11,10 +11,10 @@
 
 #define HOST_PIN_DP   14   // Pin used as D+ for host, D- = D+ + 1
 
-#define PIN_BTN_1 10
-#define PIN_BTN_2 11
-#define PIN_BTN_3 12
-#define PIN_BTN_4 13
+#define PIN_BTN_3 10 
+#define PIN_BTN_4 11
+#define PIN_BTN_1 12
+#define PIN_BTN_2 13
 
 #define DISP_MAX_BRIGHTNESS 6
 #define MIDI_CHANNEL  1 
@@ -55,8 +55,6 @@ static bool stop_reading = false;
 
 unsigned long timer_previous_millis = 0;
 
-
-
 int8_t CURRENT_PROGRAM = 0;
 
 byte CURRENT_MODEL = 0x5f;   //0x58 = MS-50G, 0x61 = MS-70CD, 0x5f = MS-60B
@@ -65,6 +63,7 @@ char CURRENT_NAME[11] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}
 uint8_t CURRENT_DISPLAY = 4;
 int8_t CURRENT_DISPLAY_POSITION = 0;
 
+bool IS_CONNECTED = false;
 
 uint8_t effectsEnabled[4] = {0, 0, 0, 0};
 
@@ -97,7 +96,7 @@ static void onProgramChange(Channel channel, byte program)
 static void onSysEx(byte* message, unsigned size)
 {
 
-    
+    IS_CONNECTED = true;
      // DEBUG OUTPUT
     Serial.printf("(i) SysEx received (%d bytes):\r\n", size);
     //for(unsigned i = 0; i < size; i++) Serial.printf("%02x ", message[i]);
@@ -354,9 +353,10 @@ void setup()
   Wire.begin(); //Join I2C bus
 
   pinMode(PIN_BTN_1, INPUT_PULLUP);
-  pinMode(PIN_BTN_2, INPUT_PULLUP);
-  pinMode(PIN_BTN_3, INPUT_PULLUP);
+  pinMode(PIN_BTN_2, INPUT_PULLUP); 
+  pinMode(PIN_BTN_3, INPUT_PULLUP); 
   pinMode(PIN_BTN_4, INPUT_PULLUP);
+  pinMode(LED_BUILTIN, OUTPUT);
 
   Serial.println("Moin!");
 
@@ -365,6 +365,7 @@ void setup()
     Serial.println("Device did not acknowledge! Freezing.");
     while (1);
   }
+
   Serial.println("Display acknowledged.");
   display.setBrightness(DISP_MAX_BRIGHTNESS);
   display.print("Moin");
@@ -392,13 +393,15 @@ void loop() {
 
 void Refresh()
 {
-    
+    IS_CONNECTED=false;
+
     sendEditModeOn();
     sendPatchRequest();
     //sendProgramRequest();
     usbhMIDI.writeFlushAll();
     usbhMIDI.readAll();
     ParseCurrentPatch();
+
 }
 
 
@@ -407,6 +410,13 @@ void Heartbeat(){
   if (!(current_millis - timer_previous_millis >= HEARTBEAT_INTERVAL))
       return;
   timer_previous_millis = current_millis;
+
+  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // blink
+
+  IS_CONNECTED=false;
+  sendPatchRequest();
+  usbhMIDI.writeFlushAll();
+  usbhMIDI.readAll();
 
   UpdateDisplay();
   //display.shiftLeft();
@@ -572,6 +582,10 @@ void UpdateDisplay(){
     //Serial.printf("(i) CURRENT_DISPLAY_POSITION: %d\r\n", CURRENT_DISPLAY_POSITION);
     //
 
+    //if(!IS_CONNECTED){
+    //  display.printf("NO_C");
+    //  return;
+    //}
 
     char displayContent[4] = {0x20, 0x20,0x20,0x20};
 
